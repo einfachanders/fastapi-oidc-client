@@ -1,6 +1,10 @@
-from fastapi import APIRouter, Response
+from typing import Annotated
+
+from fastapi import APIRouter, Query, Request, Response, HTTPException
 from fastapi.responses import RedirectResponse
 from app.core.config import settings
+from app.schemas.oidc import AuthorizationResponse
+from app.security import oidc
 
 router = APIRouter(
     prefix="/oauth",
@@ -9,10 +13,32 @@ router = APIRouter(
 
 
 @router.get("")
-def init_oauth(response: Response) -> RedirectResponse:
+async def init_oauth(response: Response) -> RedirectResponse:
+    # Generate PKCE code verifier and code challenge
+    # https://datatracker.ietf.org/doc/html/rfc7636#section-4.1
+    code_verifier, code_challenge = await oidc.gen_oauth_code_challenge()
+    oidc_nonce = await oidc.gen_oidc_nonce()
+    oauth_state = await oidc.gen_oauth_state()
+
+    oauth_session_jws = await oidc.gen_auth_jws(
+        code_verifier=code_verifier,
+        oidc_nonce=oidc_nonce,
+        oauth_state=oauth_state
+    )
+    
+    oidc_redirect_url = await oidc.gen_oidc_redirect(
+        code_challenge=code_challenge,
+        oidc_nonce=oidc_nonce,
+        oauth_state=oauth_state
+    )
+    print("Code Verifier: " + code_verifier)
+    response = RedirectResponse(
+        url=oidc_redirect_url
+    )
+
     response.set_cookie(
-        key="auth_session",
-        value="test",
+        key="oauth_session",
+        value=oauth_session_jws,
         max_age=120,
         path="/",
         domain=settings.FASTAPI_DOMAIN,
@@ -20,10 +46,44 @@ def init_oauth(response: Response) -> RedirectResponse:
         httponly=True,
         samesite="lax"
     )
-    return
+    return response
 
 
 @router.get("/callback")
-def oauth_callback(response: Response) -> None:
+async def oauth_callback(auth_response: Annotated[AuthorizationResponse, Query()], 
+                         request: Request, response: Response) -> None:
+    oauth_session_cookie = request.cookies["oauth_session"]
+    oauth_session = await oidc.verify_auth_jws(oauth_session_cookie)
+
+    # verify oauth state
+    if not oauth_session["oauth_state"] == auth_response.state:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "status_code": 400,
+                "status_message": "Bad Request",
+                "error": "Invalid OAuth state"
+            }
+        )
+
+    # verify issuer
+    if not auth_response.iss == settings.KEYCLOAK_ISSUER:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "status_code": 400,
+                "status_message": "Bad Request",
+                "error": "Unexpected issuer"
+            }
+        )
+
+    print("Code Verifier: " + oauth_session["code_verifier"])
+
+    # request tokens
+    await oidc.autorize(
+        code=auth_response.code,
+        code_verifier=oauth_session["code_verifier"]
+    )
+
     response.delete_cookie("auth_session")
     return

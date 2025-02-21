@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     FASTAPI_BACKEND_CORS_ORIGINS: Annotated[
         list[AnyUrl] | str, BeforeValidator(parse_cors)
     ] = []
+    # 128 bit secret to encrypt cookies
+    # NOTE: can be regenerated for each livetime since
+    # the cookies are very short-lived and not renewed
+    FASTAPI_JWS_SECRET: str = os.urandom(32).hex()
     FASTAPI_DOMAIN: str
     FASTAPI_PORT: int
     # FastAPI/OpenAPI project name
@@ -48,28 +52,39 @@ class Settings(BaseSettings):
 
     @computed_field
     @property
+    def KEYCLOAK_ISSUER(self) -> str:
+        return f"{self.KEYCLOAK_URL}/realms/{self.KEYCLOAK_REALM}"
+
+
+    @computed_field
+    @property
     def KEYCLOAK_OPENID_CONFIG_URL(self) -> str:
-        return f"{self.KEYCLOAK_URL}/realms/{self.KEYCLOAK_REALM}/.well-known/openid-configuration"
+        return f"{self.KEYCLOAK_ISSUER}/.well-known/openid-configuration"
     
     @computed_field
     @property
     def KEYCLOAK_TOKEN_URL(self) -> str:
-        return f"{self.KEYCLOAK_URL}/realms/{self.KEYCLOAK_REALM}/protocol/openid-connect/token"
+        return f"{self.KEYCLOAK_ISSUER}/protocol/openid-connect/token"
     
     @computed_field
     @property
     def KEYCLOAK_AUTH_URL(self) -> str:
-        return f"{self.KEYCLOAK_URL}/realms/{self.KEYCLOAK_REALM}/protocol/openid-connect/auth"
+        return f"{self.KEYCLOAK_ISSUER}/protocol/openid-connect/auth"
 
     @computed_field
     @property
     def KEYCLOAK_LOGIN_REDIRECT_URL(self) -> str:
-        return f"{self.FASTAPI_HOST}/api/v1/auth/callback"
+        return f"{self.FASTAPI_HOST}/api/v1/oauth/callback"
     
     @computed_field
     @property
     def KEYCLOAK_LOGOUT_URL(self) -> str:
-        return f"{self.KEYCLOAK_URL}/realms/{self.KEYCLOAK_REALM}/protocol/openid-connect/logout"
+        return f"{self.KEYCLOAK_ISSUER}/protocol/openid-connect/logout"
+
+    @computed_field
+    @property
+    def KEYCLOAK_TOKEN_URL(self) -> str:
+        return f"{self.KEYCLOAK_ISSUER}/protocol/openid-connect/token"
 
     # @computed_field
     # @property
