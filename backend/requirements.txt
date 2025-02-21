@@ -1,0 +1,8 @@
+cachetools
+fastapi[standard]
+httpx
+pydantic
+pydantic-settings
+python-jose[cryptography]
+redis
+uvicorn
