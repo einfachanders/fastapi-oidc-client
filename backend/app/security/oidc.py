@@ -138,7 +138,8 @@ async def autorize(code: str, code_verifier: str) -> None:
         code_verifier (str): PKCE code verifier
 
     Raises:
-        HTTPException: FastAPI Exception
+        HTTPException: Raised in case the token request
+            was unsuccessful
     """
     access_token_req = {
         "client_id": settings.KEYCLOAK_CLIENT_ID,
@@ -167,7 +168,17 @@ async def autorize(code: str, code_verifier: str) -> None:
         )
 
 
-async def _get_jwks(kid: str) -> None:
+async def _get_jwks(kid: str) -> dict:
+    """Get a signature key from the OpenID Provider/OAuth Authorization
+    Server. Utilizes a TTLCache to prevent querying the OP/AS for every
+    token verification
+
+    Args:
+        kid (str): ID of the key to retrieve
+
+    Returns:
+        dict: Dictionary with the key details
+    """
     if kid in jwks_cache:
         return jwks_cache[kid]
     jwks_response = httpx.get(settings.KEYCLOAK_JWKS_URL).json()
@@ -177,7 +188,19 @@ async def _get_jwks(kid: str) -> None:
             return key
 
 
-async def verify_access_token(access_token: str) -> None:
+async def verify_access_token(access_token: str) -> AccessTokenClaims:
+    """Verify an OAuth access token
+
+    Args:
+        access_token (str): Access token to verify
+
+    Raises:
+        HTTPException: Raised in case an unexpected token type
+            was provided
+
+    Returns:
+        AccessTokenClaims: Pydantic model of the access token claims
+    """
     header = jwt.get_unverified_header(access_token)
     key = await _get_jwks(header["kid"])
     # verify token signature, audience and issuer
@@ -201,7 +224,22 @@ async def verify_access_token(access_token: str) -> None:
     return AccessTokenClaims(**claims)
 
 
-async def verify_id_token(id_token: str, access_token: str, nonce: str) -> None:
+async def verify_id_token(id_token: str, access_token: str, nonce: str) -> IDTokenClaims:
+    """Verify an OIDC ID token
+
+    Args:
+        id_token (str): ID token to verify
+        access_token (str): OAuth access token to verify ID token at_hash claim
+        nonce (str): OIDC nonce that should be claimed in the ID token
+
+    Raises:
+        HTTPException: Raised in case an unexpected token type was provided
+        HTTPException: Raided in case the provided nonce does not match the
+            nonce claimed in the token
+
+    Returns:
+        IDTokenClaims: Pydantic model of the ID token claims
+    """
     header = jwt.get_unverified_header(id_token)
     key = await _get_jwks(header["kid"])
     # verify token signature, audience, issuer and
@@ -239,5 +277,11 @@ async def verify_id_token(id_token: str, access_token: str, nonce: str) -> None:
 
 
 async def verify_token_resp(token_resp: dict, oauth_session: dict) -> None:
+    """Verify the token included in a OAuth/OIDC token request
+
+    Args:
+        token_resp (dict): OAuth/OIDC token response
+        oauth_session (dict): OAuth session cookie content
+    """
     await verify_access_token(token_resp["access_token"])
     await verify_id_token(token_resp["id_token"], token_resp["access_token"], oauth_session["oidc_nonce"])
