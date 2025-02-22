@@ -13,27 +13,19 @@ class AuthorizationResponse(BaseModel):
     code: str = Field(description="OAuth Authorization Code Flow code")
 
 
-class RealmAccess(BaseModel):
-    roles: list[str] = Field(description="User roles in the Keycloak realm")
-    
-
-class ResourceRoles(BaseModel):
-    roles: list[str] = Field(description="User roles")
-
-
-class AccessTokenClaims(BaseModel):
-    allowed_origins: Optional[list[str]] = Field(
+class CommonTokenClaims(BaseModel):
+    acr: Optional[str] = Field(
         default=None,
-        description="Optional: Allowed request origins (i think?)"
+        description="Optional: Authentication Context Class Reference"
     )
-    aud: list[str] = Field(description="Required: Intended JWT recipients")
-    auth_time: Optional[datetime] = Field(
-        default=None,
-        description="Optional: Time when the End-User authentication occurred"
-    )
+    aud: list[str] | str = Field(description="Required: Intended JWT recipients")
     azp: Optional[str] = Field(
         default=None,
         description="Optional: Party the token was issued to"
+    )
+    auth_time: Optional[datetime] = Field(
+        default=None,
+        description="Optional: Time when the End-User authentication occurred"
     )
     email: Optional[str] = Field(
         default=None,
@@ -53,6 +45,7 @@ class AccessTokenClaims(BaseModel):
         description="Optional: Given name of the subject"
     )
     iat: datetime = Field(description="Required: Time of token issuance")
+    iss: str = Field(description="Identity of the Authorization Server")
     jti: UUID = Field(description="Required: Unique JWT identifier")
     name: Optional[str] = Field(
         default=None,
@@ -61,6 +54,27 @@ class AccessTokenClaims(BaseModel):
     preferred_username: Optional[str] = Field(
         default=None,
         description="Optional: Preferred username of the subject"
+    )
+    sid: UUID = Field(description="Required: Session indetifier")
+    sub: UUID = Field(description="Required: Subject Identifier")
+    typ: Optional[str] = Field(
+        default=None,
+        description="Optional: Token type"
+    )
+
+
+class RealmAccess(BaseModel):
+    roles: list[str] = Field(description="User roles in the Keycloak realm")
+    
+
+class ResourceRoles(BaseModel):
+    roles: list[str] = Field(description="User roles")
+
+
+class AccessTokenClaims(CommonTokenClaims):
+    allowed_origins: Optional[list[str]] = Field(
+        default=None,
+        description="Optional: Allowed request origins (i think?)"
     )
     realm_access: Optional[RealmAccess] = Field(
         default=None,
@@ -71,8 +85,12 @@ class AccessTokenClaims(BaseModel):
         description="Optional: User specific access roles per resource as defined in Keycloak"
     )
     scope: str = Field(description="Required: Requested OAuth scopes")
-    sub: UUID = Field(description="Required: Subject Identifier")
-    typ: Optional[str] = Field(
+
+
+class IDTokenClaims(CommonTokenClaims):
+    at_hash: Optional[str] = Field(
         default=None,
-        description="Optional: Token type"
+        description="Optional: Access Token hash value"
     )
+    nonce: str = Field(description="Required: OpenID Nonceused to associate a Client session "
+                       "with an ID Token and to mitigate replay attacks")
