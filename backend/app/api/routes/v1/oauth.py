@@ -26,12 +26,12 @@ async def init_oauth(response: Response) -> RedirectResponse:
         oauth_state=oauth_state
     )
     
-    oidc_redirect_url = await oidc.gen_oidc_redirect(
+    oidc_redirect_url = await oidc.gen_oidc_auth_req_url(
         code_challenge=code_challenge,
         oidc_nonce=oidc_nonce,
         oauth_state=oauth_state
     )
-    print("Code Verifier: " + code_verifier)
+
     response = RedirectResponse(
         url=oidc_redirect_url
     )
@@ -77,13 +77,13 @@ async def oauth_callback(auth_response: Annotated[AuthorizationResponse, Query()
             }
         )
 
-    print("Code Verifier: " + oauth_session["code_verifier"])
-
     # request tokens
-    await oidc.autorize(
+    token_resp = await oidc.autorize(
         code=auth_response.code,
         code_verifier=oauth_session["code_verifier"]
     )
+
+    await oidc.verify_token_resp(token_resp, oauth_session)
 
     response.delete_cookie("auth_session")
     return

@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     def FASTAPI_HOST(self) -> str:
         return f"{self.FASTAPI_PROTOCOL}://{self.FASTAPI_DOMAIN}:{self.FASTAPI_PORT}"
 
+    @computed_field
+    @property
+    def FASTAPI_RESOURCE(self) -> str:
+        """OAuth Resource Server identifier for OAuth audience-restriction
+        as per https://datatracker.ietf.org/doc/html/rfc9700#aud_restriction
+        """
+        return f"{self.FASTAPI_HOST}{self.FASTAPI_BASE_URI}"
+
     # Path to the applications root folder, used for path construction
     # this will point to the app/ directory
     PROJECT_DIR: str = str(Path(__file__).resolve().parent.parent)
@@ -60,6 +68,11 @@ class Settings(BaseSettings):
     @property
     def KEYCLOAK_OPENID_CONFIG_URL(self) -> str:
         return f"{self.KEYCLOAK_ISSUER}/.well-known/openid-configuration"
+
+    @computed_field
+    @property
+    def KEYCLOAK_JWKS_URL(self) -> str:
+        return f"{self.KEYCLOAK_ISSUER}/protocol/openid-connect/certs"
     
     @computed_field
     @property
