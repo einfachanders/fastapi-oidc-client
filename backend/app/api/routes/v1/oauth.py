@@ -1,11 +1,11 @@
 import json
 from typing import Annotated
-from fastapi import APIRouter, Query, Request, Response, HTTPException, Form
+from fastapi import APIRouter, Query, Request, Response, HTTPException, Form, Depends
 from fastapi.responses import RedirectResponse
 from app.core.config import settings
 from app.deps import session_store
 from app.schemas.api_responses import CallbackResponse, RefreshResponse
-from app.schemas.oidc import AuthorizationResponse
+from app.schemas.oidc import AccessTokenClaims, AuthorizationResponse
 from app.security import oidc
 
 router = APIRouter(
@@ -111,6 +111,30 @@ async def refresh_token(grant_type: Annotated[str, Form()], refresh_token: Annot
                                        verified_access_token.exp)
 
     return RefreshResponse(**token_resp)
+
+# TODO: Implement https://openid.net/specs/openid-connect-rpinitiated-1_0.html#RPLogout
+# Need to add ID Token to session store to use as id token hint upon logout
+@router.post("/logout", response_class=RedirectResponse)
+async def backchannel_logout(refresh_token: Annotated[str, Form()],
+                             access_token: AccessTokenClaims = Depends(session_store.verify_session)):
+    """
+    Redirect to Keycloak logout
+    """
+    # Logout with User redirected to Keycloak
+    # params = {
+    #     "post_logout_redirect_uri": settings.KEYCLOAK_LOGOUT_REDIRECT_URI,
+    # }
+    # url = f"{settings.KEYCLOAK_LOGOUT_URL}?{httpx.QueryParams(params)}"
+    # return RedirectResponse(url=url)
+
+    # end user session
+    await session_store.invalidate_session(access_token.sid)
+
+    # use user agent's refresh_token to logout user
+    await oidc.logout(refresh_token)
+
+    # redirect user agent to logout
+    return RedirectResponse(url=settings.KEYCLOAK_LOGOUT_URL)
 
 
 # TODO: User logout endpoint and backchannel logout endpoint

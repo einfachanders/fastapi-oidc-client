@@ -14,26 +14,6 @@ from app.schemas.oidc import AccessTokenClaims, IDTokenClaims, TokenIntrospectio
 jwks_cache = TTLCache(maxsize=10, ttl=600)
 
 
-async def _get_jwks(kid: str) -> dict:
-    """Get a signature key from the OpenID Provider/OAuth Authorization
-    Server. Utilizes a TTLCache to prevent querying the OP/AS for every
-    token verification
-
-    Args:
-        kid (str): ID of the key to retrieve
-
-    Returns:
-        dict: Dictionary with the key details
-    """
-    if kid in jwks_cache:
-        return jwks_cache[kid]
-    jwks_response = httpx.get(settings.KEYCLOAK_JWKS_URL).json()
-    for key in jwks_response["keys"]:
-        if key["kid"] == kid:
-            jwks_cache[kid] = key
-            return key
-
-
 async def autorize(code: str, code_verifier: str) -> None:
     """Performs the OAuth/OIDC token request
 
@@ -72,6 +52,34 @@ async def autorize(code: str, code_verifier: str) -> None:
         )
 
 
+async def logout(refresh_token: str) -> None:
+    """Log out a user's session using the user agents refresh_token against the IDP
+
+    Args:
+        refresh_token (str): User agents refresh token
+
+    Raises:
+        HTTPException: HTTP Exception returned to user agent in case of an error
+    """
+    logout_request = {
+            "refresh_token": refresh_token,
+            "client_id": settings.KEYCLOAK_CLIENT_ID,
+            "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
+    }
+    try:
+        response = httpx.post(settings.KEYCLOAK_LOGOUT_URL, data=logout_request)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status_code": 500,
+                "status_message": "Internal Server Error",
+                "error": "Error while logging out at the OpenID Provider"
+            }
+        )
+
+
 async def refresh(refresh_token: str):
     refresh_request = {
         "grant_type": "refresh_token",
@@ -95,6 +103,26 @@ async def refresh(refresh_token: str):
                 "error": "Error while requesting token refresh from the OpenID Provider"
             }
         )
+
+
+async def _get_jwks(kid: str) -> dict:
+    """Get a signature key from the OpenID Provider/OAuth Authorization
+    Server. Utilizes a TTLCache to prevent querying the OP/AS for every
+    token verification
+
+    Args:
+        kid (str): ID of the key to retrieve
+
+    Returns:
+        dict: Dictionary with the key details
+    """
+    if kid in jwks_cache:
+        return jwks_cache[kid]
+    jwks_response = httpx.get(settings.KEYCLOAK_JWKS_URL).json()
+    for key in jwks_response["keys"]:
+        if key["kid"] == kid:
+            jwks_cache[kid] = key
+            return key
 
 
 async def gen_oauth_code_challenge() -> tuple[str, str]:
