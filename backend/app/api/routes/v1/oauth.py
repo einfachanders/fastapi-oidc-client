@@ -136,5 +136,4 @@ async def backchannel_logout(refresh_token: Annotated[str, Form()],
     # redirect user agent to logout
     return RedirectResponse(url=settings.KEYCLOAK_LOGOUT_URL)
 
-
-# TODO: User logout endpoint and backchannel logout endpoint
+# TODO: OAuth backchannel logout endpoint
