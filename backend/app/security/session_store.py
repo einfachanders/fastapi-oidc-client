@@ -1,6 +1,9 @@
 from datetime import datetime
+import json
 from uuid import UUID
-from fastapi import HTTPException
+from fastapi import HTTPException, Depends
+from fastapi.security import OAuth2AuthorizationCodeBearer
+from app.core.config import settings
 from app.schemas.sessions import Session
 from app.schemas.oidc import AccessTokenClaims
 from app.security import oidc
@@ -16,6 +19,11 @@ from app.security import oidc
 # since a request with a token referencing that sid will
 # first be checked via the token introspection endpoint
 # and the refused.
+
+oauth2_scheme = OAuth2AuthorizationCodeBearer(
+    authorizationUrl=settings.KEYCLOAK_AUTH_URL,
+    tokenUrl=settings.KEYCLOAK_TOKEN_URL
+)
 
 class SessionStore():
     def __init__(self):
@@ -56,7 +64,7 @@ class SessionStore():
         self.sessions[sid] = session
 
 
-    async def verify_session(self, access_token: str) -> AccessTokenClaims:
+    async def verify_session(self, access_token: str = Depends(oauth2_scheme)) -> AccessTokenClaims:
         """Verify a provided access token and its session id for validity
 
         Args:
@@ -75,7 +83,7 @@ class SessionStore():
         if session is None:
             # if session is not known, perform a token introspection to
             # check validity before adding it to the session store
-            if not oidc.token_introsepction(access_token):
+            if not await oidc.token_introsepction(access_token):
                 raise HTTPException(
                     status_code=401,
                     detail={
@@ -86,7 +94,7 @@ class SessionStore():
                 )
         # add/update session (mainly the expiry date to prevent it from
         # getting cleaned up)
-        self.update_session(verified_access_token.sid, verified_access_token.sub,
+        await self.update_session(verified_access_token.sid, verified_access_token.sub,
                             verified_access_token.exp)
         return verified_access_token
 

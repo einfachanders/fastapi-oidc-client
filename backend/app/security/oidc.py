@@ -72,6 +72,31 @@ async def autorize(code: str, code_verifier: str) -> None:
         )
 
 
+async def refresh(refresh_token: str):
+    refresh_request = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": settings.KEYCLOAK_CLIENT_ID,
+        "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
+    }
+    try:
+        refresh_response = httpx.post(
+            settings.KEYCLOAK_TOKEN_URL,
+            data=refresh_request
+        )
+        refresh_response.raise_for_status()
+        return refresh_response.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status_code": 500,
+                "status_message": "Internal Server Error",
+                "error": "Error while requesting token refresh from the OpenID Provider"
+            }
+        )
+
+
 async def gen_oauth_code_challenge() -> tuple[str, str]:
     """Generates a PKCE code verifier and code challenge as per
     https://datatracker.ietf.org/doc/html/rfc7636#section-4.1
@@ -188,6 +213,45 @@ async def verify_auth_jws(oauth_session_jws: str) -> dict:
     return json.loads(oauth_session.decode())
 
 
+async def token_introsepction(access_token: str) -> bool:
+    """Performs a OAuth token introspection request to 
+    check the validity of a provided access token
+
+    Args:
+        access_token (str): Access token to perform introspecetion for
+
+    Raises:
+        HTTPException: Raised in case the introspection request fails
+
+    Returns:
+        bool: Active state of the access token
+    """
+    introspection_post_data  = {
+        "client_id": settings.KEYCLOAK_CLIENT_ID,
+        "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
+        "token": access_token
+    }
+    try:
+        introspection_response = httpx.post(
+            url=settings.KEYCLOAK_TOKEN_INTROSPECTION_ENDPONT,
+            data=introspection_post_data
+        )
+        introspection_response.raise_for_status()
+        print(introspection_response.json())
+    except httpx.HTTPStatusError as exc:
+        print(introspection_response.text)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status_code": 500,
+                "status_message": "Internal Server Error",
+                "error": "Error while performing token introspection"
+            }
+        )
+    introspection_response =  TokenIntrospectionResponse(**introspection_response.json())
+    return introspection_response.active
+
+
 async def verify_access_token(access_token: str) -> AccessTokenClaims:
     """Verify an OAuth access token
 
@@ -204,12 +268,31 @@ async def verify_access_token(access_token: str) -> AccessTokenClaims:
     header = jwt.get_unverified_header(access_token)
     key = await _get_jwks(header["kid"])
     # verify token signature, audience and issuer
-    claims = jwt.decode(
-        token=access_token,
-        key=key,
-        audience=settings.KEYCLOAK_CLIENT_ID,
-        issuer=settings.KEYCLOAK_ISSUER
-    )
+    try:
+        claims = jwt.decode(
+            token=access_token,
+            key=key,
+            audience=settings.KEYCLOAK_CLIENT_ID,
+            issuer=settings.KEYCLOAK_ISSUER
+        )
+    except jose.exceptions.JWSSignatureError as error:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "status_code": 401,
+                "status_message": "Unauthorized",
+                "error": "Unable to verify token signature"
+            }
+        )
+    except jose.exceptions.ExpiredSignatureError as error:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "status_code": 401,
+                "status_message": "Unauthorized",
+                "error": "Token has expired"
+            }
+        )
     # when we know the signature is ok, check whether the
     # token type indicates it is an access token
     if not claims["typ"] == "Bearer":
@@ -222,41 +305,6 @@ async def verify_access_token(access_token: str) -> AccessTokenClaims:
             }
         )
     return AccessTokenClaims(**claims)
-
-
-async def token_introsepction(access_token: str) -> bool:
-    """Performs a OAuth token introspection request to 
-    check the validity of a provided access token
-
-    Args:
-        access_token (str): Access token to perform introspecetion for
-
-    Raises:
-        HTTPException: Raised in case the introspection request fails
-
-    Returns:
-        bool: Active state of the access token
-    """
-    introspection_post_data  = {
-        "token": access_token
-    }
-    try:
-        introspection_response = httpx.post(
-            url=settings.KEYCLOAK_TOKEN_INTROSPECTION_ENDPONT,
-            data=introspection_post_data
-        )
-        introspection_response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "status_code": 500,
-                "status_message": "Internal Server Error",
-                "error": "Error while performing token introspection"
-            }
-        )
-    introspection_response =  TokenIntrospectionResponse(**introspection_response.json())
-    return introspection_response.active
 
 
 async def verify_id_token(id_token: str, access_token: str, nonce: str) -> IDTokenClaims:

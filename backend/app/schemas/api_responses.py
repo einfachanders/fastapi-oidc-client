@@ -7,3 +7,7 @@ class CallbackResponse(BaseModel):
     refresh_token: str
     token_type: str
     id_token: str
+
+
+class RefreshResponse(CallbackResponse):
+    pass

@@ -1,10 +1,10 @@
 import json
 from typing import Annotated
-from fastapi import APIRouter, Query, Request, Response, HTTPException
+from fastapi import APIRouter, Query, Request, Response, HTTPException, Form
 from fastapi.responses import RedirectResponse
 from app.core.config import settings
 from app.deps import session_store
-from app.schemas.api_responses import CallbackResponse
+from app.schemas.api_responses import CallbackResponse, RefreshResponse
 from app.schemas.oidc import AuthorizationResponse
 from app.security import oidc
 
@@ -86,11 +86,31 @@ async def oauth_callback(auth_response: Annotated[AuthorizationResponse, Query()
         code_verifier=oauth_session["code_verifier"]
     )
 
-    # verify retrieved token
+    # verify retrieved access and id token
     verified_access_token = await oidc.verify_token_resp(token_resp, oauth_session)
     
+    # directly add this session to the session store since it was just created
     await session_store.update_session(verified_access_token.sid, verified_access_token.sub,
                                  verified_access_token.exp)
 
     response.delete_cookie("oauth_session")
     return CallbackResponse(**token_resp)
+
+
+@router.post("/refresh", status_code=200, response_model=RefreshResponse)
+async def refresh_token(grant_type: Annotated[str, Form()], refresh_token: Annotated[str, Form()]):
+    # use user agents refresh_token to refresh access, id and refresh_token
+    token_resp = await oidc.refresh(refresh_token)
+
+    # verify retrieved access token
+    # TODO: check if it is possible to verify the id token although no new nonce was provided
+    verified_access_token = await oidc.verify_access_token(token_resp["access_token"])
+
+    # update session in session store
+    await session_store.update_session(verified_access_token.sid, verified_access_token.sub,
+                                       verified_access_token.exp)
+
+    return RefreshResponse(**token_resp)
+
+
+# TODO: User logout endpoint and backchannel logout endpoint
