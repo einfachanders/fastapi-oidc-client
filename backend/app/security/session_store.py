@@ -1,0 +1,95 @@
+from datetime import datetime
+from uuid import UUID
+from fastapi import HTTPException
+from app.schemas.sessions import Session
+from app.schemas.oidc import AccessTokenClaims
+from app.security import oidc
+
+# Idea: Freshly created access tokens using this client
+# are directly added to session. For request providing
+# a jwt with a session that is unknown, the token
+# introspection endpoint is used. If a session is valid,
+# it is added to the session store. If it is invalid,
+# 401 is returned and the session is not added. For backchannel
+# logouts, if that session is in the session store, it is 
+# removed. If it is not in the session store, nothing is done
+# since a request with a token referencing that sid will
+# first be checked via the token introspection endpoint
+# and the refused.
+
+class SessionStore():
+    def __init__(self):
+        # all session in this session store SHOULD represent
+        # valid session (i.e. session that have not been revoked
+        # and are not expired)
+        self.sessions: dict[UUID, Session] = {}
+
+
+    async def cleanup_sessions(self) -> None:
+        """Remove expired sessions from the session store
+        """
+        for session, session_data in self.sessions.items():
+            if session_data.exp < datetime.now(session_data.exp.tzinfo):
+                self.sessions.pop(session)
+
+
+    async def invalidate_session(self, sid: UUID) -> None:
+        """Remove a session from the session store (e.g. in case of
+        backchannel logout)
+
+        Args:
+            sid (UUID): Session to remove
+        """
+        self.sessions.pop(sid)
+
+
+    async def update_session(self, sid: UUID, sub: UUID, exp: datetime) -> None:
+        """Add a session to the session store or update an existing session
+        in the session store
+
+        Args:
+            sid (UUID): Session ID
+            sub (UUID): Session subject identifier
+            exp (datetime): Session expiry
+        """
+        session = Session(sub=sub, exp=exp)
+        self.sessions[sid] = session
+
+
+    async def verify_session(self, access_token: str) -> AccessTokenClaims:
+        """Verify a provided access token and its session id for validity
+
+        Args:
+            access_token (str): Access token to check validity of
+
+        Raises:
+            HTTPException: Raised in case the session is invalid
+
+        Returns:
+            AccessTokenClaims: Pydantic model of the access token claims
+        """
+        # verify the validity of the access token
+        verified_access_token = await oidc.verify_access_token(access_token)
+        # check if session is known
+        session = self.sessions.get(verified_access_token.sid, None)
+        if session is None:
+            # if session is not known, perform a token introspection to
+            # check validity before adding it to the session store
+            if not oidc.token_introsepction(access_token):
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "status_code": 401,
+                        "status_message": "Unauthorized",
+                        "error": "Token/session is invalid"
+                    }
+                )
+        # add/update session (mainly the expiry date to prevent it from
+        # getting cleaned up)
+        self.update_session(verified_access_token.sid, verified_access_token.sub,
+                            verified_access_token.exp)
+        return verified_access_token
+
+
+class RedisSessionStore(SessionStore):
+    pass

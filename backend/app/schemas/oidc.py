@@ -13,6 +13,58 @@ class AuthorizationResponse(BaseModel):
     code: str = Field(description="OAuth Authorization Code Flow code")
 
 
+class TokenIntrospectionResponse(BaseModel):
+    """OAuth token introspection response as per
+    https://datatracker.ietf.org/doc/html/rfc7662#section-2.2
+    """
+    active: bool = Field(description="Required: Indicates whether the access token "
+                         "is still valid")
+    aud: Optional[list[str]] | str = Field(
+        default=None,
+        description="Required: Intended JWT recipients"
+    )
+    client_id: Optional[str] = Field(
+        default=None,
+        description="Optional: ID of the client that requested the token"
+    )
+    exp: Optional[datetime] = Field(
+        default=None,
+        description="Optional: Expiry time of token"
+    )
+    iat: Optional[datetime] = Field(
+        default=None,
+        description="Required: Time of token issuance"
+    )
+    iss: Optional[str] = Field(
+        default=None,
+        description="Identity of the Authorization Server"
+    )
+    jti: Optional[UUID] = Field(
+        default=None,
+        description="Required: Unique JWT identifier"
+    )
+    nbf: Optional[datetime] = Field(
+        default=None,
+        description="Required: Timestampt the token should not be used before"
+    )
+    scope: Optional[str] = Field(
+        default=None,
+        description="Optional: List of scopes associated with the token"
+    )
+    sub: Optional[UUID] = Field(
+        default=None,
+        description="Required: Subject Identifier"
+    )
+    token_type: Optional[str] = Field(
+        default=None,
+        description="Optional: Type of the token"
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="Optional: Resource owner who authorized this token"
+    )    
+
+
 class CommonTokenClaims(BaseModel):
     acr: Optional[str] = Field(
         default=None,
@@ -55,7 +107,7 @@ class CommonTokenClaims(BaseModel):
         default=None,
         description="Optional: Preferred username of the subject"
     )
-    sid: UUID = Field(description="Required: Session indetifier")
+    sid: UUID = Field(description="Required: Session identifier")
     sub: UUID = Field(description="Required: Subject Identifier")
     typ: Optional[str] = Field(
         default=None,

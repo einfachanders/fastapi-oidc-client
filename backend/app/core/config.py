@@ -96,17 +96,8 @@ class Settings(BaseSettings):
 
     @computed_field
     @property
-    def KEYCLOAK_TOKEN_URL(self) -> str:
-        return f"{self.KEYCLOAK_ISSUER}/protocol/openid-connect/token"
+    def KEYCLOAK_TOKEN_INTROSPECTION_ENDPONT(self) -> str:
+        return f"{self.KEYCLOAK_ISSUER}/protocol/openid-connect/token/introspect"
 
-    # @computed_field
-    # @property
-    # def FASTAPI_HOST(self) -> str:
-    #     return f"{self.FASTAPI_PROTOCOL}://{self.FASTAPI_DOMAIN}"
-
-    # @computed_field
-    # @property
-    # def FASTAPI_URL(self) -> str:
-    #     return f"{self.FASTAPI_HOST}/{self.FASTAPI_BASE_URI}"
 
 settings = Settings()

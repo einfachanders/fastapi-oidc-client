@@ -8,38 +8,68 @@ from cachetools import TTLCache
 from jose import jws, jwt
 from fastapi import HTTPException
 from app.core.config import settings
-from app.schemas.oidc import AccessTokenClaims, IDTokenClaims
+from app.schemas.oidc import AccessTokenClaims, IDTokenClaims, TokenIntrospectionResponse
 
 
 jwks_cache = TTLCache(maxsize=10, ttl=600)
 
 
-async def gen_oidc_nonce(nonce_length: int = 16) -> str:
-    """Generates an OIDC Nonce as per 
-    https://openid.net/specs/openid-connect-core-1_0.html#NonceNotes
+async def _get_jwks(kid: str) -> dict:
+    """Get a signature key from the OpenID Provider/OAuth Authorization
+    Server. Utilizes a TTLCache to prevent querying the OP/AS for every
+    token verification
 
     Args:
-        nonce_length (int, optional): Length of the nonce in bytes. Defaults to 16.
+        kid (str): ID of the key to retrieve
 
     Returns:
-        str: OIDC nonce as hex string
+        dict: Dictionary with the key details
     """
-    nonce = os.urandom(nonce_length).hex()
-    return nonce
+    if kid in jwks_cache:
+        return jwks_cache[kid]
+    jwks_response = httpx.get(settings.KEYCLOAK_JWKS_URL).json()
+    for key in jwks_response["keys"]:
+        if key["kid"] == kid:
+            jwks_cache[kid] = key
+            return key
 
 
-async def gen_oauth_state(state_length: int = 16) -> str:
-    """Generates an OAuth state as per 
-    https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.1
+async def autorize(code: str, code_verifier: str) -> None:
+    """Performs the OAuth/OIDC token request
 
     Args:
-        state_length (int, optional): Length of the state in bytes. Defaults to 16.
+        code (str): Authorization Code Flow code
+        code_verifier (str): PKCE code verifier
 
-    Returns:
-        str: OAuth state as hex string
+    Raises:
+        HTTPException: Raised in case the token request
+            was unsuccessful
     """
-    state = os.urandom(state_length).hex()
-    return state
+    access_token_req = {
+        "client_id": settings.KEYCLOAK_CLIENT_ID,
+        "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
+        "code": code,
+        "code_verifier": code_verifier,
+        "grant_type": "authorization_code",
+        "redirect_uri": settings.KEYCLOAK_LOGIN_REDIRECT_URL,
+        "scope": "openid"
+    }
+    try:
+        authorize_resp = httpx.post(
+            url=settings.KEYCLOAK_TOKEN_URL,
+            data=access_token_req
+        )
+        authorize_resp.raise_for_status()
+        return authorize_resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status_code": 500,
+                "status_message": "Internal Server Error",
+                "error": "Error while retrieving token from the OpenID Provider"
+            }
+        )
 
 
 async def gen_oauth_code_challenge() -> tuple[str, str]:
@@ -58,6 +88,20 @@ async def gen_oauth_code_challenge() -> tuple[str, str]:
         hashlib.sha256(code_verifier.encode()).digest()
     ).decode().rstrip("=")
     return code_verifier, code_challenge
+
+
+async def gen_oauth_state(state_length: int = 16) -> str:
+    """Generates an OAuth state as per 
+    https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.1
+
+    Args:
+        state_length (int, optional): Length of the state in bytes. Defaults to 16.
+
+    Returns:
+        str: OAuth state as hex string
+    """
+    state = os.urandom(state_length).hex()
+    return state
 
 
 async def gen_auth_jws(code_verifier: str, oidc_nonce: str, oauth_state: str) -> str:
@@ -112,6 +156,20 @@ async def gen_oidc_auth_req_url(code_challenge: str, oauth_state: str, oidc_nonc
     return f"{settings.KEYCLOAK_AUTH_URL}?{httpx.QueryParams(oidc_query_params)}"
 
 
+async def gen_oidc_nonce(nonce_length: int = 16) -> str:
+    """Generates an OIDC Nonce as per 
+    https://openid.net/specs/openid-connect-core-1_0.html#NonceNotes
+
+    Args:
+        nonce_length (int, optional): Length of the nonce in bytes. Defaults to 16.
+
+    Returns:
+        str: OIDC nonce as hex string
+    """
+    nonce = os.urandom(nonce_length).hex()
+    return nonce
+
+
 async def verify_auth_jws(oauth_session_jws: str) -> dict:
     """Verifies an OAuth session in form of a JSON Web Signature
     extracted from a cookie
@@ -128,64 +186,6 @@ async def verify_auth_jws(oauth_session_jws: str) -> dict:
         algorithms="HS256"
     )
     return json.loads(oauth_session.decode())
-
-
-async def autorize(code: str, code_verifier: str) -> None:
-    """Performs the OAuth/OIDC token request
-
-    Args:
-        code (str): Authorization Code Flow code
-        code_verifier (str): PKCE code verifier
-
-    Raises:
-        HTTPException: Raised in case the token request
-            was unsuccessful
-    """
-    access_token_req = {
-        "client_id": settings.KEYCLOAK_CLIENT_ID,
-        "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
-        "code": code,
-        "code_verifier": code_verifier,
-        "grant_type": "authorization_code",
-        "redirect_uri": settings.KEYCLOAK_LOGIN_REDIRECT_URL,
-        "scope": "openid"
-    }
-    try:
-        authorize_resp = httpx.post(
-            url=settings.KEYCLOAK_TOKEN_URL,
-            data=access_token_req
-        )
-        authorize_resp.raise_for_status()
-        return authorize_resp.json()
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "status_code": 500,
-                "status_message": "Internal Server Error",
-                "error": "Error while retrieving token from the OpenID Provider"
-            }
-        )
-
-
-async def _get_jwks(kid: str) -> dict:
-    """Get a signature key from the OpenID Provider/OAuth Authorization
-    Server. Utilizes a TTLCache to prevent querying the OP/AS for every
-    token verification
-
-    Args:
-        kid (str): ID of the key to retrieve
-
-    Returns:
-        dict: Dictionary with the key details
-    """
-    if kid in jwks_cache:
-        return jwks_cache[kid]
-    jwks_response = httpx.get(settings.KEYCLOAK_JWKS_URL).json()
-    for key in jwks_response["keys"]:
-        if key["kid"] == kid:
-            jwks_cache[kid] = key
-            return key
 
 
 async def verify_access_token(access_token: str) -> AccessTokenClaims:
@@ -222,6 +222,41 @@ async def verify_access_token(access_token: str) -> AccessTokenClaims:
             }
         )
     return AccessTokenClaims(**claims)
+
+
+async def token_introsepction(access_token: str) -> bool:
+    """Performs a OAuth token introspection request to 
+    check the validity of a provided access token
+
+    Args:
+        access_token (str): Access token to perform introspecetion for
+
+    Raises:
+        HTTPException: Raised in case the introspection request fails
+
+    Returns:
+        bool: Active state of the access token
+    """
+    introspection_post_data  = {
+        "token": access_token
+    }
+    try:
+        introspection_response = httpx.post(
+            url=settings.KEYCLOAK_TOKEN_INTROSPECTION_ENDPONT,
+            data=introspection_post_data
+        )
+        introspection_response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status_code": 500,
+                "status_message": "Internal Server Error",
+                "error": "Error while performing token introspection"
+            }
+        )
+    introspection_response =  TokenIntrospectionResponse(**introspection_response.json())
+    return introspection_response.active
 
 
 async def verify_id_token(id_token: str, access_token: str, nonce: str) -> IDTokenClaims:
@@ -276,12 +311,16 @@ async def verify_id_token(id_token: str, access_token: str, nonce: str) -> IDTok
     return IDTokenClaims(**claims)
 
 
-async def verify_token_resp(token_resp: dict, oauth_session: dict) -> None:
+async def verify_token_resp(token_resp: dict, oauth_session: dict) -> AccessTokenClaims:
     """Verify the token included in a OAuth/OIDC token request
 
     Args:
         token_resp (dict): OAuth/OIDC token response
         oauth_session (dict): OAuth session cookie content
+
+    Returns:
+        AccessTokenClaims: Pydantic model of the access token claims
     """
-    await verify_access_token(token_resp["access_token"])
+    verified_access_token = await verify_access_token(token_resp["access_token"])
     await verify_id_token(token_resp["id_token"], token_resp["access_token"], oauth_session["oidc_nonce"])
+    return verified_access_token

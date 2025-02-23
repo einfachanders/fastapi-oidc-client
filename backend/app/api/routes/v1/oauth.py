@@ -1,8 +1,10 @@
+import json
 from typing import Annotated
-
 from fastapi import APIRouter, Query, Request, Response, HTTPException
 from fastapi.responses import RedirectResponse
 from app.core.config import settings
+from app.deps import session_store
+from app.schemas.api_responses import CallbackResponse
 from app.schemas.oidc import AuthorizationResponse
 from app.security import oidc
 
@@ -49,9 +51,10 @@ async def init_oauth(response: Response) -> RedirectResponse:
     return response
 
 
-@router.get("/callback")
+@router.get("/callback", status_code=200, response_model=CallbackResponse)
 async def oauth_callback(auth_response: Annotated[AuthorizationResponse, Query()], 
-                         request: Request, response: Response) -> None:
+                         request: Request, response: Response) -> CallbackResponse:
+    # get oauth session data from cookie (nonce, oauth_state, code_verifier)
     oauth_session_cookie = request.cookies["oauth_session"]
     oauth_session = await oidc.verify_auth_jws(oauth_session_cookie)
 
@@ -77,13 +80,17 @@ async def oauth_callback(auth_response: Annotated[AuthorizationResponse, Query()
             }
         )
 
-    # request tokens
+    # request tokens from OpenID Provider/OAuth Authorization Server
     token_resp = await oidc.autorize(
         code=auth_response.code,
         code_verifier=oauth_session["code_verifier"]
     )
 
-    await oidc.verify_token_resp(token_resp, oauth_session)
+    # verify retrieved token
+    verified_access_token = await oidc.verify_token_resp(token_resp, oauth_session)
+    
+    await session_store.update_session(verified_access_token.sid, verified_access_token.sub,
+                                 verified_access_token.exp)
 
-    response.delete_cookie("auth_session")
-    return
+    response.delete_cookie("oauth_session")
+    return CallbackResponse(**token_resp)
