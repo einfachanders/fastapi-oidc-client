@@ -385,6 +385,7 @@ async def verify_id_token(id_token: str, access_token: str, nonce: str) -> IDTok
     return IDTokenClaims(**claims)
 
 # TODO: Check that the token does not contain a nonce
+# TODO: Use only one function for verify and utilize kwargs
 async def verify_logout_token(logout_token: str) -> LogoutTokenClaims:
     """Verify an OIDC logout token as per https://openid.net/specs/openid-connect-backchannel-1_0.html#Validation
 

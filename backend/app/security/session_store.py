@@ -48,7 +48,8 @@ class SessionStore():
         Args:
             sid (UUID): Session to remove
         """
-        self.sessions.pop(sid)
+        if sid in self.sessions.keys():
+            self.sessions.pop(sid)
 
 
     async def update_session(self, sid: UUID, sub: UUID, exp: datetime) -> None:

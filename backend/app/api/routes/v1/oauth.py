@@ -17,36 +17,46 @@ router = APIRouter(
 async def init_oauth(response: Response) -> RedirectResponse:
     # Generate PKCE code verifier and code challenge
     # https://datatracker.ietf.org/doc/html/rfc7636#section-4.1
-    code_verifier, code_challenge = await oidc.gen_oauth_code_challenge()
-    oidc_nonce = await oidc.gen_oidc_nonce()
-    oauth_state = await oidc.gen_oauth_state()
+    try:
+        code_verifier, code_challenge = await oidc.gen_oauth_code_challenge()
+        oidc_nonce = await oidc.gen_oidc_nonce()
+        oauth_state = await oidc.gen_oauth_state()
 
-    oauth_session_jws = await oidc.gen_auth_jws(
-        code_verifier=code_verifier,
-        oidc_nonce=oidc_nonce,
-        oauth_state=oauth_state
-    )
-    
-    oidc_redirect_url = await oidc.gen_oidc_auth_req_url(
-        code_challenge=code_challenge,
-        oidc_nonce=oidc_nonce,
-        oauth_state=oauth_state
-    )
+        oauth_session_jws = await oidc.gen_auth_jws(
+            code_verifier=code_verifier,
+            oidc_nonce=oidc_nonce,
+            oauth_state=oauth_state
+        )
+        
+        oidc_redirect_url = await oidc.gen_oidc_auth_req_url(
+            code_challenge=code_challenge,
+            oidc_nonce=oidc_nonce,
+            oauth_state=oauth_state
+        )
 
-    response = RedirectResponse(
-        url=oidc_redirect_url
-    )
+        response = RedirectResponse(
+            url=oidc_redirect_url
+        )
 
-    response.set_cookie(
-        key="oauth_session",
-        value=oauth_session_jws,
-        max_age=120,
-        path="/",
-        domain=settings.FASTAPI_DOMAIN,
-        secure=True if settings.FASTAPI_PROTOCOL == "https" else False,
-        httponly=True,
-        samesite="lax"
-    )
+        response.set_cookie(
+            key="oauth_session",
+            value=oauth_session_jws,
+            max_age=120,
+            path="/",
+            domain=settings.FASTAPI_DOMAIN,
+            secure=True if settings.FASTAPI_PROTOCOL == "https" else False,
+            httponly=True,
+            samesite="lax"
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status_code": 500,
+                "status_message": "Bad Request",
+                "error": "Internal Server Error while initiating OIDC login"
+            }
+        )
     return response
 
 
