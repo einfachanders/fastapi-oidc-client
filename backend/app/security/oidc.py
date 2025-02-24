@@ -8,7 +8,7 @@ from cachetools import TTLCache
 from jose import jws, jwt
 from fastapi import HTTPException
 from app.core.config import settings
-from app.schemas.oidc import AccessTokenClaims, IDTokenClaims, TokenIntrospectionResponse
+from app.schemas.oidc import AccessTokenClaims, IDTokenClaims, LogoutTokenClaims, TokenIntrospectionResponse
 
 
 jwks_cache = TTLCache(maxsize=10, ttl=600)
@@ -241,7 +241,7 @@ async def verify_auth_jws(oauth_session_jws: str) -> dict:
     return json.loads(oauth_session.decode())
 
 
-async def token_introsepction(access_token: str) -> bool:
+async def token_introspection(access_token: str) -> bool:
     """Performs a OAuth token introspection request to 
     check the validity of a provided access token
 
@@ -265,9 +265,7 @@ async def token_introsepction(access_token: str) -> bool:
             data=introspection_post_data
         )
         introspection_response.raise_for_status()
-        print(introspection_response.json())
     except httpx.HTTPStatusError as exc:
-        print(introspection_response.text)
         raise HTTPException(
             status_code=500,
             detail={
@@ -385,6 +383,70 @@ async def verify_id_token(id_token: str, access_token: str, nonce: str) -> IDTok
             }
         )
     return IDTokenClaims(**claims)
+
+# TODO: Check that the token does not contain a nonce
+async def verify_logout_token(logout_token: str) -> LogoutTokenClaims:
+    """Verify an OIDC logout token as per https://openid.net/specs/openid-connect-backchannel-1_0.html#Validation
+
+    Args:
+        logout_token (str): OIDC logout token
+
+    Raises:
+        HTTPException: Raised in case a wrong token type was provided
+        HTTPException: Raised in case the token signature is invalid
+        HTTPException: Raised in case the token has expired
+        HTTPException: General error occured during token validation
+
+    Returns:
+        LogoutTokenClaims: Pydantic model of the logout token claims
+    """
+    try:
+        header = jwt.get_unverified_header(logout_token)
+        key = await _get_jwks(header["kid"])
+        # verify token signature, audience, issuer and
+        claims = jwt.decode(
+            token=logout_token,
+            key=key,
+            audience=settings.KEYCLOAK_CLIENT_ID,
+            issuer=settings.KEYCLOAK_ISSUER
+        )
+        if not "events" in claims.keys():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "status_code": 401,
+                    "status_message": "Unauthorized",
+                    "error": "Provided token is not a logout token"
+                }
+            )
+    except jose.exceptions.JWSSignatureError as error:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "status_code": 401,
+                "status_message": "Unauthorized",
+                "error": "Unable to verify token signature"
+            }
+        )
+    except jose.exceptions.ExpiredSignatureError as error:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "status_code": 401,
+                "status_message": "Unauthorized",
+                "error": "Token has expired"
+            }
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "status_code": 401,
+                "status_message": "Unauthorized",
+                "error": "Unable to verify logout token"
+            }
+        )
+    return LogoutTokenClaims(**claims)
 
 
 async def verify_token_resp(token_resp: dict, oauth_session: dict) -> AccessTokenClaims:

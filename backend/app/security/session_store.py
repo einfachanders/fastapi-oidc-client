@@ -83,7 +83,7 @@ class SessionStore():
         if session is None:
             # if session is not known, perform a token introspection to
             # check validity before adding it to the session store
-            if not await oidc.token_introsepction(access_token):
+            if not await oidc.token_introspection(access_token):
                 raise HTTPException(
                     status_code=401,
                     detail={

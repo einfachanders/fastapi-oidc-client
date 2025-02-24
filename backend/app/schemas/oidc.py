@@ -146,3 +146,17 @@ class IDTokenClaims(CommonTokenClaims):
     )
     nonce: str = Field(description="Required: OpenID Nonceused to associate a Client session "
                        "with an ID Token and to mitigate replay attacks")
+
+
+class LogoutTokenClaims(BaseModel):
+    iss: str = Field(description="Identity of the Authorization Server")
+    sub: Optional[UUID] = Field(
+        default=None,
+        description="Required: Subject Identifier"
+    )
+    aud: list[str] | str = Field(description="Required: Intended JWT recipients")
+    iat: datetime = Field(description="Required: Time of token issuance")
+    exp: datetime = Field(description="Required: Expiry time of token")
+    jti: UUID = Field(description="Required: Unique JWT identifier")
+    events: dict = Field(description="Required: Indicates this token is a logout token")
+    sid: UUID = Field(description="Required: Session identifier")

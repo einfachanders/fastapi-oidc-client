@@ -1,4 +1,3 @@
-import json
 from typing import Annotated
 from fastapi import APIRouter, Query, Request, Response, HTTPException, Form, Depends
 from fastapi.responses import RedirectResponse
@@ -55,8 +54,29 @@ async def init_oauth(response: Response) -> RedirectResponse:
 async def oauth_callback(auth_response: Annotated[AuthorizationResponse, Query()], 
                          request: Request, response: Response) -> CallbackResponse:
     # get oauth session data from cookie (nonce, oauth_state, code_verifier)
-    oauth_session_cookie = request.cookies["oauth_session"]
-    oauth_session = await oidc.verify_auth_jws(oauth_session_cookie)
+    try:
+        oauth_session_cookie = request.cookies["oauth_session"]
+    except Exception as error:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "status_code": 400,
+                "status_message": "Bad Request",
+                "error": "oauth_session cookie missing"
+            }
+        )
+
+    try:
+        oauth_session = await oidc.verify_auth_jws(oauth_session_cookie)
+    except Exception as error:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "status_code": 400,
+                "status_message": "Bad Request",
+                "error": "Invalid cookie signature"
+            }
+        )
 
     # verify oauth state
     if not oauth_session["oauth_state"] == auth_response.state:
@@ -97,6 +117,7 @@ async def oauth_callback(auth_response: Annotated[AuthorizationResponse, Query()
     return CallbackResponse(**token_resp)
 
 
+# TODO: Add error handling (e.g. session is invalid and user requests a refresh)
 @router.post("/refresh", status_code=200, response_model=RefreshResponse)
 async def refresh_token(grant_type: Annotated[str, Form()], refresh_token: Annotated[str, Form()]):
     # use user agents refresh_token to refresh access, id and refresh_token
@@ -112,28 +133,28 @@ async def refresh_token(grant_type: Annotated[str, Form()], refresh_token: Annot
 
     return RefreshResponse(**token_resp)
 
+
 # TODO: Implement https://openid.net/specs/openid-connect-rpinitiated-1_0.html#RPLogout
-# Need to add ID Token to session store to use as id token hint upon logout
-@router.post("/logout", response_class=RedirectResponse)
-async def backchannel_logout(refresh_token: Annotated[str, Form()],
-                             access_token: AccessTokenClaims = Depends(session_store.verify_session)):
-    """
-    Redirect to Keycloak logout
-    """
-    # Logout with User redirected to Keycloak
-    # params = {
-    #     "post_logout_redirect_uri": settings.KEYCLOAK_LOGOUT_REDIRECT_URI,
-    # }
-    # url = f"{settings.KEYCLOAK_LOGOUT_URL}?{httpx.QueryParams(params)}"
-    # return RedirectResponse(url=url)
+# When implementing this, Keycloak always threw an error regarding invalid client credentials.
+# However, this makes little to no sense, since i would be redirecting the user agent to
+# the logout url, and including the client secret in that url would be fatal.
+# @router.post("/logout", status_code=204)
+# async def backchannel_logout(refresh_token: Annotated[str, Form()],
+#                              access_token: AccessTokenClaims = Depends(session_store.verify_session)):
+#     # end user session
+#     await session_store.invalidate_session(access_token.sid)
 
+#     # use user agent's refresh_token to logout user
+#     await oidc.logout(refresh_token)
+
+
+@router.post("/backchannel-logout", status_code=204)
+async def backchannel_logout(logout_token: Annotated[str, Form()]):
+    """OpenID Backchannel Logout as per https://openid.net/specs/openid-connect-backchannel-1_0.html
+
+    Args:
+        logout_token (Annotated[str, Form): Logout token issued by OP
+    """
+    verified_logout_token = await oidc.verify_logout_token(logout_token)
     # end user session
-    await session_store.invalidate_session(access_token.sid)
-
-    # use user agent's refresh_token to logout user
-    await oidc.logout(refresh_token)
-
-    # redirect user agent to logout
-    return RedirectResponse(url=settings.KEYCLOAK_LOGOUT_URL)
-
-# TODO: OAuth backchannel logout endpoint
+    await session_store.invalidate_session(verified_logout_token.sid)
