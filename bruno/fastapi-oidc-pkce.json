@@ -1,0 +1,332 @@
+{
+  "name": "fastapi-oidc-pkce",
+  "version": "1",
+  "items": [
+    {
+      "type": "folder",
+      "name": "oauth",
+      "items": [
+        {
+          "type": "http",
+          "name": "Init Authorization Code PKCE Flow",
+          "seq": 1,
+          "request": {
+            "url": "{{fastapi_protocol}}://{{fastapi_host}}:{{fastapi_port}}/api/v1/oauth",
+            "method": "GET",
+            "headers": [],
+            "params": [],
+            "body": {
+              "mode": "none",
+              "formUrlEncoded": [],
+              "multipartForm": [],
+              "file": []
+            },
+            "script": {
+              "req": "req.setMaxRedirects(0);\n",
+              "res": "bru.setEnvVar(\"oauth_authorize_url\",res.getHeaders().location)\n\n// api_cookies = res.getHeader(\"set-cookie\")\n// bru.setEnvVar(\"api_cookies\",api_cookies)"
+            },
+            "vars": {},
+            "assertions": [],
+            "tests": "",
+            "docs": "",
+            "auth": {
+              "mode": "none"
+            }
+          }
+        },
+        {
+          "type": "http",
+          "name": "Init Keycloak Auth",
+          "seq": 2,
+          "request": {
+            "url": "{{oauth_authorize_url}}",
+            "method": "GET",
+            "headers": [],
+            "params": [],
+            "body": {
+              "mode": "none",
+              "formUrlEncoded": [],
+              "multipartForm": [],
+              "file": []
+            },
+            "script": {
+              "req": "req.setMaxRedirects(0);\n",
+              "res": "const responseText = res.body; // Get the raw response text\n\n// Regular expression to extract the action attribute\nconst match = responseText.match(/<form[^>]+action=[\"']([^\"']+)[\"']/);\n\nif (match) {\n    const actionUrl = match[1]; // Extracted action URL\n    bru.setEnvVar(\"keycloak_login_action\",actionUrl)\n} else {\n    console.log(\"Action URL not found!\");\n}\n\n// keycloak_cookies = res.getHeader(\"set-cookie\")\n// bru.setEnvVar(\"keycloak_cookies\",keycloak_cookies)"
+            },
+            "vars": {},
+            "assertions": [],
+            "tests": "",
+            "docs": "",
+            "auth": {
+              "mode": "none"
+            }
+          }
+        },
+        {
+          "type": "http",
+          "name": "Keycloak Auth",
+          "seq": 3,
+          "request": {
+            "url": "{{keycloak_login_action}}",
+            "method": "POST",
+            "headers": [],
+            "params": [],
+            "body": {
+              "mode": "multipartForm",
+              "formUrlEncoded": [],
+              "multipartForm": [
+                {
+                  "type": "text",
+                  "name": "username",
+                  "value": "{{keycloak_user}}",
+                  "enabled": true
+                },
+                {
+                  "type": "text",
+                  "name": "password",
+                  "value": "{{keycloak_user_password}}",
+                  "enabled": true
+                }
+              ],
+              "file": []
+            },
+            "script": {
+              "req": "req.setMaxRedirects(0);",
+              "res": "var locationUrl = res.getHeaders().location\n\nfunction getQueryParam(url, param) {\n  var queryString = url.split(\"?\")[1];\n  if (queryString) {\n    var params = queryString.split(\"&\");\n    for (var i = 0; i < param.length; i++) {\n      var pair = params[i].split(\"=\");\n      if (pair[0] === param) {\n        return pair[1];\n      }\n    }\n  }\n}\n\nvar code = getQueryParam(locationUrl, \"code\");\nbru.setEnvVar(\"code\",code)\nvar state = getQueryParam(locationUrl, \"state\");\nbru.setEnvVar(\"state\",state)\nvar session_state = getQueryParam(locationUrl, \"session_state\");\nbru.setEnvVar(\"session_state\",session_state)\nvar iss = getQueryParam(locationUrl, \"iss\");\nbru.setEnvVar(\"iss\",iss)\nconsole.log(code)\n"
+            },
+            "vars": {},
+            "assertions": [],
+            "tests": "",
+            "docs": "",
+            "auth": {
+              "mode": "none"
+            }
+          }
+        },
+        {
+          "type": "http",
+          "name": "Logout",
+          "seq": 6,
+          "request": {
+            "url": "{{fastapi_protocol}}://{{fastapi_host}}:{{fastapi_port}}/api/v1/oauth/logout",
+            "method": "POST",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "enabled": true
+              }
+            ],
+            "params": [],
+            "body": {
+              "mode": "multipartForm",
+              "formUrlEncoded": [],
+              "multipartForm": [
+                {
+                  "type": "text",
+                  "name": "refresh_token",
+                  "value": "{{refresh_token}}",
+                  "enabled": true
+                }
+              ],
+              "file": []
+            },
+            "script": {
+              "req": "req.setMaxRedirects(0);"
+            },
+            "vars": {},
+            "assertions": [],
+            "tests": "",
+            "docs": "",
+            "auth": {
+              "mode": "none"
+            }
+          }
+        },
+        {
+          "type": "http",
+          "name": "Token Refresh",
+          "seq": 5,
+          "request": {
+            "url": "{{fastapi_protocol}}://{{fastapi_host}}:{{fastapi_port}}/api/v1/oauth/refresh",
+            "method": "POST",
+            "headers": [],
+            "params": [],
+            "body": {
+              "mode": "multipartForm",
+              "formUrlEncoded": [],
+              "multipartForm": [
+                {
+                  "type": "text",
+                  "name": "grant_type",
+                  "value": "refresh_token",
+                  "enabled": true
+                },
+                {
+                  "type": "text",
+                  "name": "refresh_token",
+                  "value": "{{refresh_token}}",
+                  "enabled": true
+                }
+              ],
+              "file": []
+            },
+            "script": {
+              "res": "access_token = res(\"access_token\")\nbru.setEnvVar(\"access_token\",access_token)\nrefresh_token = res(\"refresh_token\")\nbru.setEnvVar(\"refresh_token\",refresh_token)"
+            },
+            "vars": {},
+            "assertions": [],
+            "tests": "",
+            "docs": "",
+            "auth": {
+              "mode": "none"
+            }
+          }
+        },
+        {
+          "type": "http",
+          "name": "Token Request",
+          "seq": 4,
+          "request": {
+            "url": "{{fastapi_protocol}}://{{fastapi_host}}:{{fastapi_port}}/api/v1/oauth/callback?code={{code}}&state={{state}}&session_state={{session_state}}&iss={{iss}}",
+            "method": "GET",
+            "headers": [],
+            "params": [
+              {
+                "name": "code",
+                "value": "{{code}}",
+                "type": "query",
+                "enabled": true
+              },
+              {
+                "name": "state",
+                "value": "{{state}}",
+                "type": "query",
+                "enabled": true
+              },
+              {
+                "name": "session_state",
+                "value": "{{session_state}}",
+                "type": "query",
+                "enabled": true
+              },
+              {
+                "name": "iss",
+                "value": "{{iss}}",
+                "type": "query",
+                "enabled": true
+              }
+            ],
+            "body": {
+              "mode": "multipartForm",
+              "formUrlEncoded": [],
+              "multipartForm": [],
+              "file": []
+            },
+            "script": {
+              "res": "access_token = res(\"access_token\")\nbru.setEnvVar(\"access_token\",access_token)\nrefresh_token = res(\"refresh_token\")\nbru.setEnvVar(\"refresh_token\",refresh_token)"
+            },
+            "vars": {},
+            "assertions": [],
+            "tests": "",
+            "docs": "",
+            "auth": {
+              "mode": "none"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "folder",
+      "name": "protected",
+      "items": [
+        {
+          "type": "http",
+          "name": "protected",
+          "seq": 1,
+          "request": {
+            "url": "{{fastapi_protocol}}://{{fastapi_host}}:{{fastapi_port}}/api/v1/protected",
+            "method": "GET",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "enabled": true
+              }
+            ],
+            "params": [],
+            "body": {
+              "mode": "none",
+              "formUrlEncoded": [],
+              "multipartForm": [],
+              "file": []
+            },
+            "script": {},
+            "vars": {},
+            "assertions": [],
+            "tests": "",
+            "docs": "",
+            "auth": {
+              "mode": "none"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "activeEnvironmentUid": "CWijphX7cTwT37xENP2O1",
+  "environments": [
+    {
+      "variables": [
+        {
+          "name": "fastapi_host",
+          "value": "xxx.xxx.xxx.xxx",
+          "enabled": true,
+          "secret": false,
+          "type": "text"
+        },
+        {
+          "name": "fastapi_protocol",
+          "value": "http",
+          "enabled": true,
+          "secret": false,
+          "type": "text"
+        },
+        {
+          "name": "fastapi_port",
+          "value": "8000",
+          "enabled": true,
+          "secret": false,
+          "type": "text"
+        },
+        {
+          "name": "keycloak_user",
+          "value": "username",
+          "enabled": true,
+          "secret": false,
+          "type": "text"
+        },
+        {
+          "name": "keycloak_user_password",
+          "value": "password",
+          "enabled": true,
+          "secret": true,
+          "type": "text"
+        }
+      ],
+      "name": "fastapi-oidc-pkce"
+    }
+  ],
+  "brunoConfig": {
+    "version": "1",
+    "name": "fastapi-oidc-pkce",
+    "type": "collection",
+    "ignore": [
+      "node_modules",
+      ".git"
+    ],
+    "size": 0.0035619735717773438,
+    "filesCount": 8
+  }
+}
