@@ -117,7 +117,20 @@ async def oauth_callback(auth_response: Annotated[AuthorizationResponse, Query()
     )
 
     # verify retrieved access and id token
-    verified_access_token = await oidc.verify_token_resp(token_resp, oauth_session)
+    # in case an error occurs during the verification, just throw
+    # a general error, since that should really not happen with
+    # a correctly configured OP
+    try:
+        verified_access_token = await oidc.verify_token_resp(token_resp, oauth_session)
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "status_code": 500,
+                "status_message": "Internal Server Error",
+                "error": "Error while validating the OPs token response"
+            }
+        )
     
     # directly add this session to the session store since it was just created
     await session_store.update_session(verified_access_token.sid, verified_access_token.sub,

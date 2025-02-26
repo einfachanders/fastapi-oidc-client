@@ -4,6 +4,7 @@ from starlette.middleware.cors import CORSMiddleware
 # local modules
 from app.api.main import api_router
 from app.core.config import settings
+from app.core import logging
 from app.security import oidc
 
 # init FastAPI application
@@ -25,7 +26,13 @@ if settings.FASTAPI_BACKEND_CORS_ORIGINS:
         allow_headers=["*"],
     )
 
+logger = logging.get_logger(__name__)
+
+app.add_middleware(logging.LoggingMiddleware, logger=logger)
+
 app.include_router(
     api_router,
     prefix=settings.FASTAPI_BASE_URI
 )
+
+logger.info(f"{settings.FASTAPI_PROJECT_NAME} ready and accepting connection")

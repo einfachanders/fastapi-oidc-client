@@ -1,9 +1,11 @@
 from datetime import datetime
+import jose.exceptions
 import json
 from uuid import UUID
 from fastapi import HTTPException, Depends
 from fastapi.security import OAuth2AuthorizationCodeBearer
 from app.core.config import settings
+from app.core.exceptions import UnexpectedTokenTypeError
 from app.schemas.sessions import Session
 from app.schemas.oidc import AccessTokenClaims
 from app.security import oidc
@@ -78,7 +80,45 @@ class SessionStore():
             AccessTokenClaims: Pydantic model of the access token claims
         """
         # verify the validity of the access token
-        verified_access_token = await oidc.verify_access_token(access_token)
+        try:
+            verified_access_token = await oidc.verify_access_token(access_token)
+        # catch exceptions that might occur during token verification
+        except jose.exceptions.JWSSignatureError as signature_error:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "status_code": 401,
+                    "status_message": "Unauthorized",
+                    "error": "Invalid token signature"
+                }
+            )
+        except jose.exceptions.ExpiredSignatureError as expired_error:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "status_code": 401,
+                    "status_message": "Unauthorized",
+                    "error": "Token is expired"
+                }
+            )
+        except jose.exceptions.JWTClaimsError as claims_error:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "status_code": 401,
+                    "status_message": "Unauthorized",
+                    "error": "Invalid claims in token"
+                }
+            )
+        except UnexpectedTokenTypeError as unexpected_token:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "status_code": 400,
+                    "status_message": "Bad request",
+                    "error": "Provided token is not an access token"
+                }
+            )
         # check if session is known
         session = self.sessions.get(verified_access_token.sid, None)
         if session is None:
