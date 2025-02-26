@@ -4,8 +4,6 @@ disable_existing_loggers: False
 loggers:
   uvicorn.access:
     level: INFO
-    propagate: no
 
   uvicorn.error:
     level: INFO
-    propagate: no

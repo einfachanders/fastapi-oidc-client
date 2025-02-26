@@ -1,27 +1,17 @@
-import http
 import logging
 import logging.config
 import os
+import traceback
 import yaml
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import settings
-
+from app.core.exceptions import STATUS_LINE
 
 # with open(os.path.join(settings.PROJECT_DIR, "core", "logging.yaml"), "rt", encoding="us-ascii") as f:
 #     config = yaml.safe_load(f.read())
 # logging.config.dictConfig(config)
-
-
-def _get_status_line(status_code: int) -> str:
-    try:
-        phrase = http.HTTPStatus(status_code).phrase
-    except ValueError:
-        phrase = ""
-    return "".join([str(status_code), " ", phrase])
-
-
-STATUS_LINE = {status_code: _get_status_line(status_code) for status_code in range(100, 600)}
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -47,11 +37,20 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         self.logger.info(f"Request received: {request.method} {request.url.path}" + 
                          (("?" + request.url.query) if request.url.query else ""))
 
-        response = await call_next(request)
-        
-        self.logger.info(f"Response sent: {STATUS_LINE[response.status_code]}")
-        
-        return response
+        try:
+            response = await call_next(request)
+            self.logger.info(f"Response sent: {response.status_code}")
+            return response
+        except Exception as error:
+            error_trace = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            self.logger.error(f"Error while processing the request: {error_trace}")
+            
+            # Return a proper error response instead of None
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal Server Error"}
+            )
+
 
 # disable uvicorn logging
 uvicorn_access = get_logger("uvicorn.access").disabled = True

@@ -1,10 +1,10 @@
-# 3rd party modules
+from app.core import logging
+
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
-# local modules
 from app.api.main import api_router
 from app.core.config import settings
-from app.core import logging
+
 from app.security import oidc
 
 # init FastAPI application

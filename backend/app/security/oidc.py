@@ -2,14 +2,13 @@ import os
 import base64
 import hashlib
 import httpx
-import json
 import jose.exceptions
 import ssl
 from cachetools import TTLCache
-from jose import jws, jwt
+from jose import jwt
 from fastapi import HTTPException
-from app.core import logging
 from app.core.config import settings
+from app.core import logging
 from app.core.exceptions import UnexpectedTokenTypeError, InvalidNonceError
 from app.schemas.oidc import AccessTokenClaims, IDTokenClaims, LogoutTokenClaims, TokenIntrospectionResponse
 
@@ -54,15 +53,10 @@ async def autorize(code: str, code_verifier: str) -> None:
         )
         authorize_resp.raise_for_status()
         return authorize_resp.json()
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "status_code": 500,
-                "status_message": "Internal Server Error",
-                "error": "Error while retrieving token from the OpenID Provider"
-            }
-        )
+    except httpx.HTTPStatusError:
+        logger.error("Exception while performing the OAuth authorize request: "
+                     f"HTTP Status Code {authorize_resp.status_code}; Response: {authorize_resp.text}")
+        raise
 
 
 async def logout(refresh_token: str) -> None:
@@ -107,15 +101,12 @@ async def refresh(refresh_token: str):
         )
         refresh_response.raise_for_status()
         return refresh_response.json()
+    # TODO: Implement detailed errors (i.e. refresh token expired etc.)
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "status_code": 500,
-                "status_message": "Internal Server Error",
-                "error": "Error while requesting token refresh from the OpenID Provider"
-            }
-        )
+        logger.error("Exception while performing the token refresh request: "
+                     f"HTTP Status Code {refresh_response.status_code}; "
+                     f"Response: {refresh_response.text}")
+        raise
 
 
 async def _get_jwks(kid: str) -> dict:
@@ -171,33 +162,6 @@ async def gen_oauth_state(state_length: int = 16) -> str:
     return state
 
 
-async def gen_auth_jws(code_verifier: str, oidc_nonce: str, oauth_state: str) -> str:
-    """Generates a jws containg the PKCE code verifier, OIDC nonce and the OAuth state
-    for storage in a cookie
-
-    Args:
-        code_verifier (str): PKCE code verifier
-        oidc_nonce (str): OIDC nonce
-        oauth_state (str): OAuth state
-
-    Returns:
-        str: JSON Web Signature
-    """
-    oauth_session = {
-        "oidc_nonce": oidc_nonce,
-        "oauth_state": oauth_state,
-        "code_verifier": code_verifier
-    }
-
-    oauth_session_jws = jws.sign(
-        payload=oauth_session,
-        key=settings.FASTAPI_JWS_SECRET,
-        algorithm="HS256"
-    )
-
-    return oauth_session_jws
-
-
 async def gen_oidc_auth_req_url(code_challenge: str, oauth_state: str, oidc_nonce: str) -> str:
     """Generates an OIDC authentication request url for user agent redirection
     as per https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest
@@ -235,24 +199,6 @@ async def gen_oidc_nonce(nonce_length: int = 16) -> str:
     """
     nonce = os.urandom(nonce_length).hex()
     return nonce
-
-
-async def verify_auth_jws(oauth_session_jws: str) -> dict:
-    """Verifies an OAuth session in form of a JSON Web Signature
-    extracted from a cookie
-
-    Args:
-        oauth_session_jws (str): OAuth session JWS
-
-    Returns:
-        dict: OAuth session information
-    """
-    oauth_session = jws.verify(
-        token=oauth_session_jws,
-        key=settings.FASTAPI_JWS_SECRET,
-        algorithms="HS256"
-    )
-    return json.loads(oauth_session.decode())
 
 
 async def token_introspection(access_token: str) -> bool:
@@ -307,7 +253,11 @@ async def _verify_token(token: str, type: str, **kwargs) -> dict:
     Returns:
         dict: Token claims
     """
-    header = jwt.get_unverified_header(token)
+    try:
+        header = jwt.get_unverified_header(token)
+    except jose.exceptions.JWTError as header_error:
+        logger.warning(f"Error while getting jwt headers: {header_error}")
+        raise header_error
     key = await _get_jwks(header["kid"])
     try:
         claims = jwt.decode(
@@ -395,6 +345,7 @@ async def verify_logout_token(logout_token: str) -> LogoutTokenClaims:
     """
     claims = await _verify_token(logout_token, "logout")
     if not "events" in claims.keys():
+        logger.error("Error while validating the logout token: Provided token is no logout token")
         raise UnexpectedTokenTypeError("Logout", claims["typ"] if "typ" in claims.keys() else "")
     return LogoutTokenClaims(**claims)
 

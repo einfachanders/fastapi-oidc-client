@@ -1,11 +1,10 @@
 from datetime import datetime
 import jose.exceptions
-import json
 from uuid import UUID
-from fastapi import HTTPException, Depends
+from fastapi import Depends
 from fastapi.security import OAuth2AuthorizationCodeBearer
 from app.core.config import settings
-from app.core.exceptions import UnexpectedTokenTypeError
+from app.core.exceptions import UnexpectedTokenTypeError, http_error, ERROR_MESSAGES
 from app.schemas.sessions import Session
 from app.schemas.oidc import AccessTokenClaims
 from app.security import oidc
@@ -84,55 +83,23 @@ class SessionStore():
             verified_access_token = await oidc.verify_access_token(access_token)
         # catch exceptions that might occur during token verification
         except jose.exceptions.JWSSignatureError as signature_error:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "status_code": 401,
-                    "status_message": "Unauthorized",
-                    "error": "Invalid token signature"
-                }
-            )
+            raise http_error(401, ERROR_MESSAGES["invalid_token_signature"])
         except jose.exceptions.ExpiredSignatureError as expired_error:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "status_code": 401,
-                    "status_message": "Unauthorized",
-                    "error": "Token is expired"
-                }
-            )
+            raise http_error(401, ERROR_MESSAGES["token_expired"])
         except jose.exceptions.JWTClaimsError as claims_error:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "status_code": 401,
-                    "status_message": "Unauthorized",
-                    "error": "Invalid claims in token"
-                }
-            )
+            raise http_error(401, ERROR_MESSAGES["invalid_claims"])
         except UnexpectedTokenTypeError as unexpected_token:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "status_code": 400,
-                    "status_message": "Bad request",
-                    "error": "Provided token is not an access token"
-                }
-            )
+            raise http_error(401, ERROR_MESSAGES["unexpected_token"])
+        except jose.exceptions.JWTError:
+            raise http_error(401, ERROR_MESSAGES["invalid_token"])
+
         # check if session is known
         session = self.sessions.get(verified_access_token.sid, None)
         if session is None:
             # if session is not known, perform a token introspection to
             # check validity before adding it to the session store
             if not await oidc.token_introspection(access_token):
-                raise HTTPException(
-                    status_code=401,
-                    detail={
-                        "status_code": 401,
-                        "status_message": "Unauthorized",
-                        "error": "Token/session is invalid"
-                    }
-                )
+                raise http_error(401, ERROR_MESSAGES["invalid_session"])
         # add/update session (mainly the expiry date to prevent it from
         # getting cleaned up)
         await self.update_session(verified_access_token.sid, verified_access_token.sub,
