@@ -8,12 +8,16 @@ import ssl
 from cachetools import TTLCache
 from jose import jws, jwt
 from fastapi import HTTPException
+from app.core import logging
 from app.core.config import settings
+from app.core.exceptions import UnexpectedTokenTypeError, InvalidNonceError
 from app.schemas.oidc import AccessTokenClaims, IDTokenClaims, LogoutTokenClaims, TokenIntrospectionResponse
 
 
+logger = logging.get_logger(__name__)
+
+
 if settings.HTTPX_CUSTOM_CA_CERTIFICATES:
-    print("Custom client")
     ctx = ssl.create_default_context(cafile="/etc/ssl/certs/ca-certificates.crt")
     httpx_client = httpx.AsyncClient(verify=ctx)
 else:
@@ -288,195 +292,110 @@ async def token_introspection(access_token: str) -> bool:
     return introspection_response.active
 
 
+async def _verify_token(token: str, type: str, **kwargs) -> dict:
+    """Verifies a token in jwt format
+
+    Args:
+        token (str): Token to verify
+        type (str): Type of the token (for logging purposes only)
+
+    Raises:
+        signature_error: Raised in case of an invalid signature
+        expired_error: Raised in case of an expired signature
+        claims_error: Raised in case of missing/invalid claims
+
+    Returns:
+        dict: Token claims
+    """
+    header = jwt.get_unverified_header(token)
+    key = await _get_jwks(header["kid"])
+    try:
+        claims = jwt.decode(
+            token=token,
+            key=key,
+            audience=settings.KEYCLOAK_CLIENT_ID,
+            issuer=settings.KEYCLOAK_ISSUER,
+            **kwargs
+        )
+    except jose.exceptions.JWSSignatureError as signature_error:
+        logger.warning(f"Invalid {type} token signature")
+        raise signature_error
+    except jose.exceptions.ExpiredSignatureError as expired_error:
+        logger.warning(f"Invalid {type} token signature")
+        raise expired_error
+    except jose.exceptions.JWTClaimsError as claims_error:
+        if "Invalid audience" in str(claims_error):
+            logger.error(f"Invalid audience in {type} token claims")
+            raise claims_error
+    return claims
+
+
 async def verify_access_token(access_token: str) -> AccessTokenClaims:
-    """Verify an OAuth access token
+    """Verifies an OAuth access token
 
     Args:
         access_token (str): Access token to verify
 
     Raises:
-        HTTPException: Raised in case an unexpected token type
-            was provided
+        UnexpectedTokenTypeError: Raised in case a token of another type was provided
 
     Returns:
         AccessTokenClaims: Pydantic model of the access token claims
     """
-    header = jwt.get_unverified_header(access_token)
-    key = await _get_jwks(header["kid"])
-    # verify token signature, audience and issuer
-    try:
-        claims = jwt.decode(
-            token=access_token,
-            key=key,
-            audience=settings.KEYCLOAK_CLIENT_ID,
-            issuer=settings.KEYCLOAK_ISSUER
-        )
-    except jose.exceptions.JWSSignatureError as error:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "status_code": 401,
-                "status_message": "Unauthorized",
-                "error": "Unable to verify token signature"
-            }
-        )
-    except jose.exceptions.ExpiredSignatureError as error:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "status_code": 401,
-                "status_message": "Unauthorized",
-                "error": "Token has expired"
-            }
-        )
-    except jose.exceptions.JWTClaimsError as error:
-        if "Invalid audience" in str(error):
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "status_code": 401,
-                    "status_message": "Unauthorized",
-                    "error": "Audience in the token claims does not match this client"
-                }
-            )
+    claims = await _verify_token(access_token, "access")
     # when we know the signature is ok, check whether the
     # token type indicates it is an access token
     if not claims["typ"] == "Bearer":
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "status_code": 400,
-                "status_message": "Bad Request",
-                "error": "Unexpected token type"
-            }
-        )
+        logger.warning(f"Unexpected token type received, expected: Bearer, received: {claims['typ']}")
+        raise UnexpectedTokenTypeError("Bearer", claims["typ"])
     return AccessTokenClaims(**claims)
 
 
 async def verify_id_token(id_token: str, access_token: str, nonce: str) -> IDTokenClaims:
-    """Verify an OIDC ID token
+    """Verifies and OIDC ID token
 
     Args:
         id_token (str): ID token to verify
-        access_token (str): OAuth access token to verify ID token at_hash claim
-        nonce (str): OIDC nonce that should be claimed in the ID token
+        access_token (str): Access token to match ID token 'at_hash' claim
+        nonce (str): OIDC nonce that should be inlcuded in the ID Token
 
     Raises:
-        HTTPException: Raised in case an unexpected token type was provided
-        HTTPException: Raided in case the provided nonce does not match the
-            nonce claimed in the token
+        UnexpectedTokenTypeError: Raised in case the provided token is not an ID token
+        InvalidNonceError: Raised in case the provided nonce does not match the nonce
+            in the ID token
 
     Returns:
         IDTokenClaims: Pydantic model of the ID token claims
     """
-    header = jwt.get_unverified_header(id_token)
-    key = await _get_jwks(header["kid"])
-    # verify token signature, audience, issuer and
-    # whether the access token matches the id token's 
-    # at_hash claim
-    claims = jwt.decode(
-        token=id_token,
-        key=key,
-        audience=settings.KEYCLOAK_CLIENT_ID,
-        issuer=settings.KEYCLOAK_ISSUER,
-        access_token=access_token
-    )
+    claims = await _verify_token(token=id_token, type="id", access_token=access_token)
     # when we know the signature is ok, check whether the
-    # token header indicates it is a jwt
+    # token header indicates it is an ID token
     if not claims["typ"] == "ID":
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "status_code": 400,
-                "status_message": "Bad Request",
-                "error": "Unexpected token type"
-            }
-        )
+        logger.warning(f"Unexpected token type received, expected: ID, received: {claims['typ']}")
+        raise UnexpectedTokenTypeError("ID", claims["typ"])
     # check whether the OpenID nonces match
     if not claims["nonce"] == nonce:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "status_code": 400,
-                "status_message": "Bad Request",
-                "error": "OpenID nonce mismatch"
-            }
-        )
+        logger.error(f"OIDC nonce mismatch, expected: {nonce}, received: {claims['nonce']}")
+        raise InvalidNonceError()
     return IDTokenClaims(**claims)
 
+
 # TODO: Check that the token does not contain a nonce
-# TODO: Use only one function for verify and utilize kwargs
 async def verify_logout_token(logout_token: str) -> LogoutTokenClaims:
     """Verify an OIDC logout token as per https://openid.net/specs/openid-connect-backchannel-1_0.html#Validation
 
     Args:
-        logout_token (str): OIDC logout token
+        logout_token (str): _description_
 
     Raises:
-        HTTPException: Raised in case a wrong token type was provided
-        HTTPException: Raised in case the token signature is invalid
-        HTTPException: Raised in case the token has expired
-        HTTPException: General error occured during token validation
+        UnexpectedTokenTypeError: Raised in case the provided token is not a logout token
 
     Returns:
         LogoutTokenClaims: Pydantic model of the logout token claims
     """
-    try:
-        header = jwt.get_unverified_header(logout_token)
-        key = await _get_jwks(header["kid"])
-        # verify token signature, audience, issuer and
-        claims = jwt.decode(
-            token=logout_token,
-            key=key,
-            audience=settings.KEYCLOAK_CLIENT_ID,
-            issuer=settings.KEYCLOAK_ISSUER
-        )
-        if not "events" in claims.keys():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "status_code": 401,
-                    "status_message": "Unauthorized",
-                    "error": "Provided token is not a logout token"
-                }
-            )
-    except jose.exceptions.JWSSignatureError as error:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "status_code": 401,
-                "status_message": "Unauthorized",
-                "error": "Unable to verify token signature"
-            }
-        )
-    except jose.exceptions.ExpiredSignatureError as error:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "status_code": 401,
-                "status_message": "Unauthorized",
-                "error": "Token has expired"
-            }
-        )
-    except jose.exceptions.JWTClaimsError as error:
-        print(error)
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "status_code": 401,
-                "status_message": "Unauthorized",
-                "error": "Token has expired"
-            }
-        )
-    except Exception as error:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "status_code": 401,
-                "status_message": "Unauthorized",
-                "error": "Unable to verify logout token"
-            }
-        )
+    claims = await _verify_token(logout_token, "logout")
+    if not "events" in claims.keys():
+        raise UnexpectedTokenTypeError("Logout", claims["typ"] if "typ" in claims.keys() else "")
     return LogoutTokenClaims(**claims)
 
 
