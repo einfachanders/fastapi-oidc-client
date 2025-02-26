@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Any, Annotated, Literal
+from typing import Any, Annotated, Literal, Optional
 from pydantic import AnyUrl, BeforeValidator, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # Path to the applications root folder, used for path construction
     # this will point to the app/ directory
     PROJECT_DIR: str = str(Path(__file__).resolve().parent.parent)
+
+    HTTPX_CUSTOM_CA_CERTIFICATES: Optional[bool] = False
+    HTTPX_CA_CERTIFICATES_PATH: Optional[str] = ""
 
     KEYCLOAK_URL: str
     KEYCLOAK_REALM: str

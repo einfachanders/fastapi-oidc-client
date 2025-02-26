@@ -4,11 +4,20 @@ import hashlib
 import httpx
 import json
 import jose.exceptions
+import ssl
 from cachetools import TTLCache
 from jose import jws, jwt
 from fastapi import HTTPException
 from app.core.config import settings
 from app.schemas.oidc import AccessTokenClaims, IDTokenClaims, LogoutTokenClaims, TokenIntrospectionResponse
+
+
+if settings.HTTPX_CUSTOM_CA_CERTIFICATES:
+    print("Custom client")
+    ctx = ssl.create_default_context(cafile="/etc/ssl/certs/ca-certificates.crt")
+    httpx_client = httpx.AsyncClient(verify=ctx)
+else:
+    httpx_client = httpx.AsyncClient()
 
 
 jwks_cache = TTLCache(maxsize=10, ttl=600)
@@ -35,7 +44,7 @@ async def autorize(code: str, code_verifier: str) -> None:
         "scope": "openid"
     }
     try:
-        authorize_resp = httpx.post(
+        authorize_resp = await httpx_client.post(
             url=settings.KEYCLOAK_TOKEN_URL,
             data=access_token_req
         )
@@ -67,7 +76,7 @@ async def logout(refresh_token: str) -> None:
             "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
     }
     try:
-        response = httpx.post(settings.KEYCLOAK_LOGOUT_URL, data=logout_request)
+        response = await httpx_client.post(settings.KEYCLOAK_LOGOUT_URL, data=logout_request)
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
@@ -88,7 +97,7 @@ async def refresh(refresh_token: str):
         "client_secret": settings.KEYCLOAK_CLIENT_SECRET,
     }
     try:
-        refresh_response = httpx.post(
+        refresh_response = await httpx_client.post(
             settings.KEYCLOAK_TOKEN_URL,
             data=refresh_request
         )
@@ -118,7 +127,8 @@ async def _get_jwks(kid: str) -> dict:
     """
     if kid in jwks_cache:
         return jwks_cache[kid]
-    jwks_response = httpx.get(settings.KEYCLOAK_JWKS_URL).json()
+    jwks_response = await httpx_client.get(settings.KEYCLOAK_JWKS_URL)
+    jwks_response = jwks_response.json()
     for key in jwks_response["keys"]:
         if key["kid"] == kid:
             jwks_cache[kid] = key
@@ -260,7 +270,7 @@ async def token_introspection(access_token: str) -> bool:
         "token": access_token
     }
     try:
-        introspection_response = httpx.post(
+        introspection_response = await httpx_client.post(
             url=settings.KEYCLOAK_TOKEN_INTROSPECTION_ENDPONT,
             data=introspection_post_data
         )
@@ -319,6 +329,16 @@ async def verify_access_token(access_token: str) -> AccessTokenClaims:
                 "error": "Token has expired"
             }
         )
+    except jose.exceptions.JWTClaimsError as error:
+        if "Invalid audience" in str(error):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "status_code": 401,
+                    "status_message": "Unauthorized",
+                    "error": "Audience in the token claims does not match this client"
+                }
+            )
     # when we know the signature is ok, check whether the
     # token type indicates it is an access token
     if not claims["typ"] == "Bearer":
@@ -430,6 +450,16 @@ async def verify_logout_token(logout_token: str) -> LogoutTokenClaims:
             }
         )
     except jose.exceptions.ExpiredSignatureError as error:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "status_code": 401,
+                "status_message": "Unauthorized",
+                "error": "Token has expired"
+            }
+        )
+    except jose.exceptions.JWTClaimsError as error:
+        print(error)
         raise HTTPException(
             status_code=401,
             detail={

@@ -22,15 +22,16 @@ The idea was to create a ready-to-use FastAPI template for all my projects I wan
 ```bash
 # Clone this repository and change working directory to backend/
 git clone https://github.com/einfachanders/fastapi-oidc-client
-cd fastapi-oidc-client/backend
+cd fastapi-oidc-client/
 # Create a virtual Python environment and install dependencies
 python3 -m venv python-venv
-source python-venv/bin/active
-pip install -r requirements.txt
+source python-venv/bin/activate
+pip install -r backend/requirements.txt
 # copy .env.example
 cp .env.example backend/.env
 # IMPORTANT: Fill in env values
 # run the template
+cd backend/
 uvicorn app.main:app --host 0.0.0.0
 ```
 ### Docker
